@@ -1,0 +1,234 @@
+import json
+import os
+import sqlite3
+
+JSON_FILE = "alunos.json"
+DATABASE_NAME = "escola.db"
+
+def carregar_alunos_json():
+    if os.path.exists(JSON_FILE):
+        with open(JSON_FILE, 'r', encoding='utf-8') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                print("Erro ao decodificar o arquivo JSON. Iniciando com um novo registro.")
+                return {}
+    return {}
+
+def salvar_alunos_json(alunos_data):
+    with open(JSON_FILE, 'w', encoding='utf-8') as f:
+        json.dump(alunos_data, f, indent=4, ensure_ascii=False)
+
+def connect_db():
+    conn = sqlite3.connect(DATABASE_NAME)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
+def create_tables_db():
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alunos (
+            matricula TEXT PRIMARY KEY,
+            nome TEXT NOT NULL
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            matricula_aluno TEXT NOT NULL,
+            disciplina TEXT NOT NULL,
+            nota REAL NOT NULL,
+            FOREIGN KEY (matricula_aluno) REFERENCES alunos(matricula) ON DELETE CASCADE
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+def cadastrar_aluno(storage_type):
+    matricula = input("Digite a matrícula do aluno: ")
+    nome = input("Digite o nome do aluno: ")
+
+    if storage_type == 'json':
+        alunos = carregar_alunos_json()
+        if matricula in alunos:
+            print("Matrícula já existente.")
+            return
+        alunos[matricula] = {"nome": nome, "notas": {}}
+        salvar_alunos_json(alunos)
+        print(f"Aluno '{nome}' cadastrado com matrícula '{matricula}'.")
+    elif storage_type == 'db':
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT matricula FROM alunos WHERE matricula = ?", (matricula,))
+        if cursor.fetchone():
+            print("Matrícula já existente.")
+            conn.close()
+            return
+        try:
+            cursor.execute("INSERT INTO alunos (matricula, nome) VALUES (?, ?)", (matricula, nome))
+            conn.commit()
+            print(f"Aluno '{nome}' cadastrado com matrícula '{matricula}'.")
+        except sqlite3.Error as e:
+            print(f"Erro ao cadastrar aluno no banco de dados: {e}")
+        finally:
+            conn.close()
+
+def cadastrar_nota(storage_type):
+    matricula = input("Digite a matrícula do aluno: ")
+    disciplina = input("Digite o nome da disciplina: ")
+    while True:
+        try:
+            nota = float(input(f"Digite a nota para '{disciplina}': "))
+            if 0 <= nota <= 10:
+                break
+            else:
+                print("A nota deve estar entre 0 e 10.")
+        except ValueError:
+            print("Por favor, digite um valor numérico.")
+
+    if storage_type == 'json':
+        alunos = carregar_alunos_json()
+        if matricula not in alunos:
+            print("Aluno não encontrado.")
+            return
+        alunos[matricula]["notas"][disciplina] = nota
+        salvar_alunos_json(alunos)
+        print(f"Nota '{nota}' cadastrada para '{alunos[matricula]['nome']}' em '{disciplina}'.")
+    elif storage_type == 'db':
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT matricula FROM alunos WHERE matricula = ?", (matricula,))
+        if not cursor.fetchone():
+            print("Aluno não encontrado.")
+            conn.close()
+            return
+        try:
+            cursor.execute("INSERT INTO notas (matricula_aluno, disciplina, nota) VALUES (?, ?, ?)",
+                           (matricula, disciplina, nota))
+            conn.commit()
+            print(f"Nota '{nota}' cadastrada para o aluno de matrícula '{matricula}' em '{disciplina}'.")
+        except sqlite3.Error as e:
+            print(f"Erro ao cadastrar nota no banco de dados: {e}")
+        finally:
+            conn.close()
+
+def listar_alunos(storage_type):
+    if storage_type == 'json':
+        alunos = carregar_alunos_json()
+        if not alunos:
+            print("Nenhum aluno cadastrado.")
+            return
+        print("\n--- Lista de Alunos (JSON) ---")
+        for matricula, dados in alunos.items():
+            print(f"Matrícula: {matricula}")
+            print(f"Nome: {dados['nome']}")
+            if dados['notas']:
+                print("Notas:")
+                for disciplina, nota in dados['notas'].items():
+                    print(f"   {disciplina}: {nota}")
+            else:
+                print("Nenhuma nota cadastrada.")
+            print("-" * 20)
+    elif storage_type == 'db':
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT matricula, nome FROM alunos ORDER BY nome;")
+        alunos_db = cursor.fetchall()
+
+        if not alunos_db:
+            print("Nenhum aluno cadastrado.")
+            conn.close()
+            return
+
+        print("\n--- Lista de Alunos (Banco de Dados) ---")
+        for matricula, nome in alunos_db:
+            print(f"Matrícula: {matricula}")
+            print(f"Nome: {nome}")
+            cursor.execute("SELECT disciplina, nota FROM notas WHERE matricula_aluno = ?", (matricula,))
+            notas_db = cursor.fetchall()
+            if notas_db:
+                print("Notas:")
+                for disciplina, nota in notas_db:
+                    print(f"   {disciplina}: {nota}")
+            else:
+                print("Nenhuma nota cadastrada.")
+            print("-" * 20)
+        conn.close()
+
+def excluir_aluno(storage_type):
+    matricula = input("Digite a matrícula do aluno a ser excluído: ")
+
+    if storage_type == 'json':
+        alunos = carregar_alunos_json()
+        if matricula in alunos:
+            nome_excluido = alunos.pop(matricula)["nome"]
+            salvar_alunos_json(alunos)
+            print(f"Aluno '{nome_excluido}' com matrícula '{matricula}' excluído.")
+        else:
+            print("Aluno não encontrado.")
+    elif storage_type == 'db':
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT nome FROM alunos WHERE matricula = ?", (matricula,))
+        aluno_data = cursor.fetchone()
+        if aluno_data:
+            nome_excluido = aluno_data[0]
+            try:
+                cursor.execute("DELETE FROM alunos WHERE matricula = ?", (matricula,))
+                conn.commit()
+                print(f"Aluno '{nome_excluido}' com matrícula '{matricula}' excluído.")
+            except sqlite3.Error as e:
+                print(f"Erro ao excluir aluno do banco de dados: {e}")
+            finally:
+                conn.close()
+        else:
+            print("Aluno não encontrado.")
+            conn.close()
+
+def menu_operacoes(storage_type):
+    while True:
+        print(f"\n--- Menu de Operações ({'JSON' if storage_type == 'json' else 'Banco de Dados'}) ---")
+        print("1. Cadastrar Aluno")
+        print("2. Cadastrar Nota")
+        print("3. Listar Alunos")
+        print("4. Excluir Aluno")
+        print("5. Voltar ao Menu Principal")
+
+        opcao = input("Escolha uma opção: ")
+
+        if opcao == '1':
+            cadastrar_aluno(storage_type)
+        elif opcao == '2':
+            cadastrar_nota(storage_type)
+        elif opcao == '3':
+            listar_alunos(storage_type)
+        elif opcao == '4':
+            excluir_aluno(storage_type)
+        elif opcao == '5':
+            break
+        else:
+            print("Opção inválida. Tente novamente.")
+
+def main_menu():
+    create_tables_db()
+    while True:
+        print("\n--- Menu Principal ---")
+        print("1. Usar Persistência JSON")
+        print("2. Usar Persistência de Banco de Dados (SQLite)")
+        print("3. Sair")
+
+        escolha = input("Escolha uma opção de persistência: ")
+
+        if escolha == '1':
+            menu_operacoes('json')
+        elif escolha == '2':
+            menu_operacoes('db')
+        elif escolha == '3':
+            print("Saindo do programa.")
+            break
+        else:
+            print("Opção inválida. Tente novamente.")
+
+if __name__ == "__main__":
+    main_menu()
